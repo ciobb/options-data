@@ -8,15 +8,19 @@ Usage:
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 
 import pandas as pd
 import streamlit as st
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from fetcher import fetch_chains
 from oi_history import save_snapshot, get_changes_for_ticker, get_history_table, snapshot_count, cleanup_old_snapshots
 from oi_history import get_iv_stats_for_ticker
-from github_sync import set_remote, has_remote, commit_and_push, get_status
+from chatbot import ask_deepseek
 
 st.set_page_config(page_title="Options Scanner", page_icon="📊", layout="wide")
 
@@ -200,43 +204,43 @@ def main() -> None:
         top_n = st.slider("Show top N", 5, 50, 10)
 
         st.divider()
-        st.subheader("☁️ GitHub Sync")
-        github_url = st.text_input(
-            "Repo URL",
-            value="",
-            placeholder="git@github.com:user/repo.git",
-            help="Save OI/IV snapshots to GitHub for cloud backup & sync.",
-        )
 
-        git_info = get_status()
-        if git_info["has_remote"]:
-            st.caption(f"✅ Remote configured · Branch: {git_info.get('branch', 'main')}")
-            if git_info.get("last_push"):
-                st.caption(f"⏱ Last push: {git_info['last_push']}")
+        if st.button("🗑️ Clear Cache", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
 
-        auto_push = st.checkbox("Auto-push after fetch", value=False)
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if st.button("🔄 Push Now", use_container_width=True):
-                with st.spinner("Pushing..."):
-                    if github_url.strip():
-                        set_remote(github_url.strip())
-                    ok, msg = commit_and_push()
-                    if ok:
-                        st.success(msg)
-                    else:
-                        st.error(msg)
-        with col_b:
-            if st.button("🗑️ Clear Cache", use_container_width=True):
-                st.cache_data.clear()
-                st.rerun()
-
-        st.divider()
         st.caption(
-            "⏰ Scheduler: Daily S&P 500 scan at 5 AM HKT (1h after US close)\n"
-            "📦 Data retention: 365 days\n"
-            "💡 Run `python scheduler.py --daemon` to start auto-scanning"
+            "⏰ GitHub Actions: Daily S&P 500 scan\n"
+            "📦 Data retention: 365 days"
         )
+
+        # ---- AI Chat in sidebar ----
+        st.divider()
+        st.subheader("🤖 AI Chat")
+
+        if "chat_history" not in st.session_state:
+            st.session_state["chat_history"] = []
+
+        if df is not None and not df.empty:
+            st.caption(f"Context: {ticker}, {len(df):,} contracts")
+
+        for msg in st.session_state["chat_history"][-6:]:  # show last 6 msgs
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        if question := st.chat_input("Ask about the data..."):
+            deepseek_key = os.getenv("DEEPSEEK_API_KEY", "")
+            st.session_state["chat_history"].append({"role": "user", "content": question})
+            with st.chat_message("assistant"):
+                with st.spinner("..."):
+                    answer = ask_deepseek(question, df, ticker, deepseek_key)
+                st.markdown(answer)
+                st.session_state["chat_history"].append({"role": "assistant", "content": answer})
+
+        if st.session_state["chat_history"]:
+            if st.button("🗑️ Clear Chat", use_container_width=True, key="clear_chat"):
+                st.session_state["chat_history"] = []
+                st.rerun()
     col1, col2 = st.columns([4, 1])
     with col1:
         ticker = st.text_input(
@@ -276,11 +280,6 @@ def main() -> None:
     save_snapshot(df)
     cleanup_old_snapshots(keep_days=365)
 
-    # Auto-push to GitHub if enabled
-    if auto_push and github_url.strip():
-        set_remote(github_url.strip())
-        commit_and_push()
-
     # Expiration filter — only valid expiry dates
     exp_dates = sorted(df["expiration"].unique())
     expiry_options = ["All expirations"] + exp_dates
@@ -302,7 +301,7 @@ def main() -> None:
     iv_stats = get_iv_stats_for_ticker(ticker, all_contracts)
     has_iv = any(v is not None for v in iv_stats.values())
 
-    # Metrics
+    # ---- Data display ----
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("📋 Ticker", ticker)
     c2.metric("📦 Contracts", f"{len(df):,}")
@@ -311,7 +310,6 @@ def main() -> None:
 
     st.divider()
 
-    # Calls & Puts — stacked vertically
     expiry_label = f" · Expiry: {expiry_filter}" if expiry_filter else ""
     st.subheader(f"📈 CALLS — Top {top_n} by Open Interest{expiry_label}")
     _show_table(calls, oi_changes, iv_stats)
@@ -321,7 +319,7 @@ def main() -> None:
     st.subheader(f"📉 PUTS — Top {top_n} by Open Interest{expiry_label}")
     _show_table(puts, oi_changes, iv_stats)
 
-    # OI History table (shows all snapshots across dates)
+    # OI History
     history_df = get_history_table(ticker, all_contracts)
     snap_count = snapshot_count()
 
@@ -332,8 +330,7 @@ def main() -> None:
     else:
         st.caption(
             f"💡 Tracking: {snap_count} snapshot(s) saved so far. "
-            "OI changes, IV Rank & IV Percentile will populate after more snapshots accumulate. "
-            "Each time you fetch a ticker, a snapshot is automatically saved."
+            "OI changes & IV Rank will populate after more snapshots accumulate."
         )
 
 
