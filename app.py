@@ -177,7 +177,7 @@ def main() -> None:
     st.title("📊 Options Scanner")
     st.caption("Top calls & puts by open interest — free CBOE data, accurate OI")
 
-    # Sidebar
+    # Sidebar: Settings
     with st.sidebar:
         st.header("⚙️ Settings")
         provider = st.selectbox(
@@ -204,43 +204,12 @@ def main() -> None:
         top_n = st.slider("Show top N", 5, 50, 10)
 
         st.divider()
-
         if st.button("🗑️ Clear Cache", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
+        st.caption("⏰ GitHub Actions: Daily S&P 500 scan\n📦 Data retention: 365 days")
 
-        st.caption(
-            "⏰ GitHub Actions: Daily S&P 500 scan\n"
-            "📦 Data retention: 365 days"
-        )
-
-        # ---- AI Chat in sidebar ----
-        st.divider()
-        st.subheader("🤖 AI Chat")
-
-        if "chat_history" not in st.session_state:
-            st.session_state["chat_history"] = []
-
-        if df is not None and not df.empty:
-            st.caption(f"Context: {ticker}, {len(df):,} contracts")
-
-        for msg in st.session_state["chat_history"][-6:]:  # show last 6 msgs
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-
-        if question := st.chat_input("Ask about the data..."):
-            deepseek_key = os.getenv("DEEPSEEK_API_KEY", "")
-            st.session_state["chat_history"].append({"role": "user", "content": question})
-            with st.chat_message("assistant"):
-                with st.spinner("..."):
-                    answer = ask_deepseek(question, df, ticker, deepseek_key)
-                st.markdown(answer)
-                st.session_state["chat_history"].append({"role": "assistant", "content": answer})
-
-        if st.session_state["chat_history"]:
-            if st.button("🗑️ Clear Chat", use_container_width=True, key="clear_chat"):
-                st.session_state["chat_history"] = []
-                st.rerun()
+    # Ticker input
     col1, col2 = st.columns([4, 1])
     with col1:
         ticker = st.text_input(
@@ -280,7 +249,7 @@ def main() -> None:
     save_snapshot(df)
     cleanup_old_snapshots(keep_days=365)
 
-    # Expiration filter — only valid expiry dates
+    # Expiration filter
     exp_dates = sorted(df["expiration"].unique())
     expiry_options = ["All expirations"] + exp_dates
     selected_expiry = st.selectbox(
@@ -299,9 +268,8 @@ def main() -> None:
     )
     oi_changes = get_changes_for_ticker(ticker, all_contracts)
     iv_stats = get_iv_stats_for_ticker(ticker, all_contracts)
-    has_iv = any(v is not None for v in iv_stats.values())
 
-    # ---- Data display ----
+    # Metrics
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("📋 Ticker", ticker)
     c2.metric("📦 Contracts", f"{len(df):,}")
@@ -332,6 +300,35 @@ def main() -> None:
             f"💡 Tracking: {snap_count} snapshot(s) saved so far. "
             "OI changes & IV Rank will populate after more snapshots accumulate."
         )
+
+    # ---- AI Chat (sidebar, rendered after data is loaded) ----
+    with st.sidebar:
+        st.divider()
+        st.subheader("🤖 AI Chat")
+
+        if "chat_history" not in st.session_state:
+            st.session_state["chat_history"] = []
+
+        if df is not None:
+            st.caption(f"Context: {ticker}, {len(df):,} contracts")
+
+        for msg in st.session_state["chat_history"][-6:]:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        if question := st.chat_input("Ask about the data..."):
+            deepseek_key = os.getenv("DEEPSEEK_API_KEY", "")
+            st.session_state["chat_history"].append({"role": "user", "content": question})
+            with st.chat_message("assistant"):
+                with st.spinner("..."):
+                    answer = ask_deepseek(question, df, ticker, deepseek_key)
+                st.markdown(answer)
+                st.session_state["chat_history"].append({"role": "assistant", "content": answer})
+
+        if st.session_state["chat_history"]:
+            if st.button("🗑️ Clear Chat", use_container_width=True, key="clear_chat"):
+                st.session_state["chat_history"] = []
+                st.rerun()
 
 
 if __name__ == "__main__":
