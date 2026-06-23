@@ -1,0 +1,62 @@
+name: Daily Options Scan
+
+on:
+  schedule:
+    # 21:00 UTC = 1 hour after US market close (4pm ET + 1h = 5pm ET = 21:00 UTC)
+    - cron: '0 21 * * 1-5'  # Mon-Fri
+  workflow_dispatch:  # manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pandas requests
+
+      - name: Fetch S&P 500 options data
+        run: |
+          python3 -c "
+          from sp500 import fetch_sp500_tickers
+          from fetcher import fetch_chains
+
+          tickers = fetch_sp500_tickers()
+          print(f'Scanning {len(tickers)} S&P 500 tickers via CBOE...')
+          df = fetch_chains(tickers, use_cboe=True)
+          if df.empty:
+              print('No data fetched')
+              exit(1)
+          print(f'Fetched {len(df)} contracts across {df[\"ticker\"].nunique()} tickers')
+
+          # Save snapshot
+          from oi_history import save_snapshot, cleanup_old_snapshots
+          save_snapshot(df)
+          cleanup_old_snapshots(keep_days=30)
+          print('Snapshot saved, old data cleaned')
+          "
+
+      - name: Commit and push
+        run: |
+          git config user.name "options-scanner-bot"
+          git config user.email "bot@options-scanner.local"
+          git add output/oi_history/*.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Daily scan $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git push
+          fi
