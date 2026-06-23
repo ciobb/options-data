@@ -29,24 +29,29 @@ jobs:
         run: pip install pandas requests yfinance
 
       - name: Fetch S&P 500 options data
+        working-directory: ${{ github.workspace }}
         run: |
           python3 -c "
+          import sys, os
+          sys.path.insert(0, os.getcwd())
           from sp500 import fetch_sp500_tickers
           from fetcher import fetch_chains
 
           tickers = fetch_sp500_tickers()
+          if not tickers:
+              print('ERROR: No S&P 500 tickers fetched')
+              exit(1)
           print(f'Scanning {len(tickers)} S&P 500 tickers via CBOE...')
           df = fetch_chains(tickers, use_cboe=True)
           if df.empty:
-              print('No data fetched')
+              print('ERROR: No data fetched')
               exit(1)
           print(f'Fetched {len(df)} contracts across {df[\"ticker\"].nunique()} tickers')
 
-          # Save snapshot
           from oi_history import save_snapshot, cleanup_old_snapshots
           save_snapshot(df)
-          cleanup_old_snapshots(keep_days=30)
-          print('Snapshot saved, old data cleaned')
+          n = cleanup_old_snapshots(keep_days=30)
+          print(f'Snapshot saved, cleaned {n} old files')
           "
 
       - name: Commit and push
