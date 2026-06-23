@@ -27,7 +27,7 @@ logger = logging.getLogger("scheduler")
 # Using 21:00 UTC to be safe year-round → 5:00 AM HKT next day
 SCAN_HOUR_UTC = 21
 SCAN_MINUTE = 0
-DATA_RETENTION_DAYS = 30
+DATA_RETENTION_DAYS = 365
 MAX_WORKERS = 5  # yfinance concurrent fetchers
 
 

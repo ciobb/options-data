@@ -234,7 +234,7 @@ def main() -> None:
         st.divider()
         st.caption(
             "⏰ Scheduler: Daily S&P 500 scan at 5 AM HKT (1h after US close)\n"
-            "📦 Data retention: 30 days\n"
+            "📦 Data retention: 365 days\n"
             "💡 Run `python scheduler.py --daemon` to start auto-scanning"
         )
     col1, col2 = st.columns([4, 1])
@@ -274,7 +274,7 @@ def main() -> None:
 
     # Save OI snapshot and clean old data
     save_snapshot(df)
-    cleanup_old_snapshots(keep_days=30)
+    cleanup_old_snapshots(keep_days=365)
 
     # Auto-push to GitHub if enabled
     if auto_push and github_url.strip():
