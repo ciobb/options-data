@@ -2,8 +2,8 @@ name: Daily Options Scan
 
 on:
   schedule:
-    # 21:00 UTC = 1 hour after US market close (4pm ET + 1h = 5pm ET = 21:00 UTC)
-    - cron: '0 21 * * 1-5'  # Mon-Fri
+    # 21:00 UTC Mon-Fri = 1 hour after US market close (runs every weekday, skip holidays in script)
+    - cron: '0 21 * * 1-5'
   workflow_dispatch:  # manual trigger
 
 permissions:
@@ -25,7 +25,51 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Check if trading day
+        run: |
+          python3 -c "
+          import datetime
+
+          # US stock market holidays 2026
+          HOLIDAYS_2026 = {
+              datetime.date(2026, 1, 1),   # New Year's Day
+              datetime.date(2026, 1, 19),  # Martin Luther King Jr. Day
+              datetime.date(2026, 2, 16),  # Presidents' Day
+              datetime.date(2026, 4, 3),   # Good Friday
+              datetime.date(2026, 5, 25),  # Memorial Day
+              datetime.date(2026, 6, 19),  # Juneteenth
+              datetime.date(2026, 7, 3),   # Independence Day (observed Friday)
+              datetime.date(2026, 9, 7),   # Labor Day
+              datetime.date(2026, 11, 26), # Thanksgiving
+              datetime.date(2026, 12, 25), # Christmas
+          }
+
+          HOLIDAYS_2027 = {
+              datetime.date(2027, 1, 1),   # New Year's Day
+              datetime.date(2027, 1, 18),  # Martin Luther King Jr. Day
+              datetime.date(2027, 2, 15),  # Presidents' Day
+              datetime.date(2027, 3, 26),  # Good Friday
+              datetime.date(2027, 5, 31),  # Memorial Day
+              datetime.date(2027, 6, 18),  # Juneteenth (observed)
+              datetime.date(2027, 7, 5),   # Independence Day (observed Monday)
+              datetime.date(2027, 9, 6),   # Labor Day
+              datetime.date(2027, 11, 25), # Thanksgiving
+              datetime.date(2027, 12, 24), # Christmas (observed Friday)
+          }
+
+          today = datetime.date.today()
+          is_holiday = today in HOLIDAYS_2026 or today in HOLIDAYS_2027
+          is_weekend = today.weekday() >= 5
+
+          if is_holiday or is_weekend:
+              print(f'Skipping: {today} is a non-trading day (holiday={is_holiday}, weekend={is_weekend})')
+              import sys; sys.exit(78)  # neutral exit code
+          else:
+              print(f'{today} is a trading day — proceeding with scan')
+          "
+
       - name: Install dependencies
+        if: success()
         run: pip install pandas requests yfinance lxml
 
       - name: Fetch S&P 500 options data
