@@ -14,27 +14,49 @@ DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
 
 def _build_context(df: Any, ticker: str) -> str:
-    """Build a compact text summary of the fetched data for the AI prompt."""
+    """Build a comprehensive text summary of the fetched data for the AI prompt."""
     if df is None or df.empty:
         return f"No data available for {ticker}."
 
     lines = [f"Options data for {ticker}:"]
     lines.append(f"Total contracts: {len(df)}")
-    lines.append(f"Expiration dates: {df['expiration'].nunique()}")
+    lines.append(f"Available expiration dates: {', '.join(sorted(df['expiration'].unique()))}")
 
-    # Top calls and puts by OI (up to 10 each)
+    # Top 50 calls and puts by OI across ALL expirations
     for opt_type, label in [("call", "CALLS"), ("put", "PUTS")]:
-        subset = df[df["optionType"] == opt_type].nlargest(10, "openInterest")
+        subset = df[df["optionType"] == opt_type].nlargest(50, "openInterest")
         if not subset.empty:
-            lines.append(f"\nTop 10 {label} by Open Interest:")
+            lines.append(f"\nTop 50 {label} by Open Interest (all expirations):")
             for _, r in subset.iterrows():
                 iv = f"{r['impliedVolatility']*100:.1f}%" if pd_notna(r.get("impliedVolatility")) else "N/A"
                 delta = f"Δ={r['delta']:.3f}" if pd_notna(r.get("delta")) else ""
+                gamma = f"Γ={r['gamma']:.4f}" if pd_notna(r.get("gamma")) else ""
+                theta = f"Θ={r['theta']:.4f}" if pd_notna(r.get("theta")) else ""
+                greeks = " ".join(filter(None, [delta, gamma, theta]))
                 lines.append(
                     f"  {r['contractSymbol']} | Strike={r['strike']} | Expiry={r['expiration']} | "
                     f"OI={int(r['openInterest'])} | IV={iv} | Bid={r.get('bid','?')} | "
-                    f"Ask={r.get('ask','?')} | Last={r.get('lastPrice','?')} {delta}"
-                )
+                    f"Ask={r.get('ask','?')} | Last={r.get('lastPrice','?')} {greeks}"
+                ).rstrip()
+
+    # Also include near-term expirations' full strike range (top 20 each)
+    exp_dates = sorted(df["expiration"].unique())
+    near_term = exp_dates[:3]  # first 3 nearest expirations
+    for exp in near_term:
+        for opt_type, label in [("call", "CALL"), ("put", "PUT")]:
+            subset = df[(df["expiration"] == exp) & (df["optionType"] == opt_type)]
+            subset = subset.nlargest(20, "openInterest")
+            if not subset.empty:
+                lines.append(f"\nNear-term {label} for {exp} (Top 20 OI):")
+                for _, r in subset.iterrows():
+                    iv = f"{r['impliedVolatility']*100:.1f}%" if pd_notna(r.get("impliedVolatility")) else "N/A"
+                    delta = f"Δ={r['delta']:.3f}" if pd_notna(r.get("delta")) else ""
+                    lines.append(
+                        f"  {r['contractSymbol']} | Strike={r['strike']} | "
+                        f"OI={int(r['openInterest'])} | IV={iv} | "
+                        f"Bid={r.get('bid','?')} | Ask={r.get('ask','?')} | "
+                        f"Last={r.get('lastPrice','?')} {delta}"
+                    ).rstrip()
 
     return "\n".join(lines)
 
@@ -86,7 +108,7 @@ def ask_deepseek(
             {"role": "user", "content": f"Context data:\n\n{context}\n\nQuestion: {question}"},
         ],
         "temperature": 0.3,
-        "max_tokens": 1024,
+        "max_tokens": 2048,
     }
 
     headers = {
