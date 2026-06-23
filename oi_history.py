@@ -159,6 +159,27 @@ def snapshot_count() -> int:
         return 0
 
 
+def cleanup_old_snapshots(keep_days: int = 30) -> int:
+    """Delete snapshot files older than *keep_days*. Returns count of removed files."""
+    base = _ensure_dir()
+    cutoff = datetime.utcnow() - timedelta(days=keep_days)
+    removed = 0
+    try:
+        for fname in os.listdir(base):
+            if not fname.startswith(_PREFIX) or not fname.endswith(".json"):
+                continue
+            path = os.path.join(base, fname)
+            mtime = datetime.fromtimestamp(os.path.getmtime(path))
+            if mtime < cutoff:
+                os.remove(path)
+                removed += 1
+        if removed:
+            logger.info("Cleaned up %d old snapshot files (older than %d days)", removed, keep_days)
+    except Exception as exc:
+        logger.warning("Cleanup error: %s", exc)
+    return removed
+
+
 def iv_rank_for_contract(contract: str, lookback_days: int = 365) -> dict[str, Any] | None:
     """Compute IV Rank and Percentile for a single contract from historical snapshots.
 

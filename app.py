@@ -14,7 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from fetcher import fetch_chains
-from oi_history import save_snapshot, get_changes_for_ticker, get_history_table, snapshot_count
+from oi_history import save_snapshot, get_changes_for_ticker, get_history_table, snapshot_count, cleanup_old_snapshots
 from oi_history import get_iv_stats_for_ticker
 from github_sync import set_remote, has_remote, commit_and_push, get_status
 
@@ -204,9 +204,16 @@ def main() -> None:
         github_url = st.text_input(
             "Repo URL",
             value="",
-            placeholder="https://github.com/user/repo.git",
+            placeholder="git@github.com:user/repo.git",
             help="Save OI/IV snapshots to GitHub for cloud backup & sync.",
         )
+
+        git_info = get_status()
+        if git_info["has_remote"]:
+            st.caption(f"✅ Remote configured · Branch: {git_info.get('branch', 'main')}")
+            if git_info.get("last_push"):
+                st.caption(f"⏱ Last push: {git_info['last_push']}")
+
         auto_push = st.checkbox("Auto-push after fetch", value=False)
         col_a, col_b = st.columns(2)
         with col_a:
@@ -223,6 +230,13 @@ def main() -> None:
             if st.button("🗑️ Clear Cache", use_container_width=True):
                 st.cache_data.clear()
                 st.rerun()
+
+        st.divider()
+        st.caption(
+            "⏰ Scheduler: Daily S&P 500 scan at 5 AM HKT (1h after US close)\n"
+            "📦 Data retention: 30 days\n"
+            "💡 Run `python scheduler.py --daemon` to start auto-scanning"
+        )
     col1, col2 = st.columns([4, 1])
     with col1:
         ticker = st.text_input(
@@ -258,8 +272,9 @@ def main() -> None:
             st.warning("Verify TWS is running with API and OPRA subscription.")
         st.stop()
 
-    # Save OI snapshot for future change tracking
+    # Save OI snapshot and clean old data
     save_snapshot(df)
+    cleanup_old_snapshots(keep_days=30)
 
     # Auto-push to GitHub if enabled
     if auto_push and github_url.strip():
