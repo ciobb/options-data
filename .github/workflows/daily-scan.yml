@@ -2,110 +2,137 @@ name: Daily Options Scan
 
 on:
   schedule:
-    # 21:00 UTC Mon-Fri = 1 hour after US market close (runs every weekday, skip holidays in script)
     - cron: '0 21 * * 1-5'
-  workflow_dispatch:  # manual trigger
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  scan:
+  check-trading-day:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-
+    outputs:
+      is_trading: ${{ steps.check.outputs.is_trading }}
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Check if trading day
+      - id: check
         run: |
           python3 -c "
           import datetime
-
-          # US stock market holidays 2026
-          HOLIDAYS_2026 = {
-              datetime.date(2026, 1, 1),   # New Year's Day
-              datetime.date(2026, 1, 19),  # Martin Luther King Jr. Day
-              datetime.date(2026, 2, 16),  # Presidents' Day
-              datetime.date(2026, 4, 3),   # Good Friday
-              datetime.date(2026, 5, 25),  # Memorial Day
-              datetime.date(2026, 6, 19),  # Juneteenth
-              datetime.date(2026, 7, 3),   # Independence Day (observed Friday)
-              datetime.date(2026, 9, 7),   # Labor Day
-              datetime.date(2026, 11, 26), # Thanksgiving
-              datetime.date(2026, 12, 25), # Christmas
+          HOLIDAYS = {
+              datetime.date(2026,1,1), datetime.date(2026,1,19), datetime.date(2026,2,16),
+              datetime.date(2026,4,3), datetime.date(2026,5,25), datetime.date(2026,6,19),
+              datetime.date(2026,7,3), datetime.date(2026,9,7), datetime.date(2026,11,26),
+              datetime.date(2026,12,25), datetime.date(2027,1,1), datetime.date(2027,1,18),
+              datetime.date(2027,2,15), datetime.date(2027,3,26), datetime.date(2027,5,31),
+              datetime.date(2027,6,18), datetime.date(2027,7,5), datetime.date(2027,9,6),
+              datetime.date(2027,11,25), datetime.date(2027,12,24),
           }
-
-          HOLIDAYS_2027 = {
-              datetime.date(2027, 1, 1),   # New Year's Day
-              datetime.date(2027, 1, 18),  # Martin Luther King Jr. Day
-              datetime.date(2027, 2, 15),  # Presidents' Day
-              datetime.date(2027, 3, 26),  # Good Friday
-              datetime.date(2027, 5, 31),  # Memorial Day
-              datetime.date(2027, 6, 18),  # Juneteenth (observed)
-              datetime.date(2027, 7, 5),   # Independence Day (observed Monday)
-              datetime.date(2027, 9, 6),   # Labor Day
-              datetime.date(2027, 11, 25), # Thanksgiving
-              datetime.date(2027, 12, 24), # Christmas (observed Friday)
-          }
-
           today = datetime.date.today()
-          is_holiday = today in HOLIDAYS_2026 or today in HOLIDAYS_2027
-          is_weekend = today.weekday() >= 5
+          skip = today in HOLIDAYS or today.weekday() >= 5
+          print(f'is_trading={not skip}')
+          print(f'::set-output name=is_trading::{not skip}')
+          " 2>&1 | tee /dev/stderr | grep 'is_trading='
 
-          if is_holiday or is_weekend:
-              print(f'Skipping: {today} is a non-trading day (holiday={is_holiday}, weekend={is_weekend})')
-              import sys; sys.exit(78)  # neutral exit code
-          else:
-              print(f'{today} is a trading day — proceeding with scan')
-          "
+  scan-batch:
+    needs: check-trading-day
+    if: needs.check-trading-day.outputs.is_trading == 'True'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        batch: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 10 parallel jobs
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
       - name: Install dependencies
-        if: success()
         run: pip install pandas requests yfinance lxml
 
-      - name: Fetch S&P 500 options data
-        working-directory: ${{ github.workspace }}
+      - name: Scan batch ${{ matrix.batch }}
+        id: scan
         run: |
           python3 -c "
-          import sys, os
+          import sys, os, time
           sys.path.insert(0, os.getcwd())
           from sp500 import fetch_sp500_tickers
           from fetcher import fetch_chains
 
           tickers = fetch_sp500_tickers()
           if not tickers:
-              print('ERROR: No S&P 500 tickers fetched')
+              print('No tickers')
               exit(1)
-          print(f'Scanning {len(tickers)} S&P 500 tickers via CBOE...')
-          df = fetch_chains(tickers, use_cboe=True)
-          if df.empty:
-              print('ERROR: No data fetched')
-              exit(1)
-          print(f'Fetched {len(df)} contracts across {df[\"ticker\"].nunique()} tickers')
 
-          from oi_history import save_snapshot, cleanup_old_snapshots
-          save_snapshot(df)
-          n = cleanup_old_snapshots(keep_days=30)
-          print(f'Snapshot saved, cleaned {n} old files')
+          # Split into ${{ matrix.batch }} / 10
+          batch_size = max(1, len(tickers) // 10)
+          start = ${{ matrix.batch }} * batch_size
+          end = start + batch_size if ${{ matrix.batch }} < 9 else len(tickers)
+          batch = tickers[start:end]
+
+          print(f'Batch ${{ matrix.batch }}: scanning {len(batch)} tickers [{start}:{end}]')
+          t0 = time.time()
+          df = fetch_chains(batch, use_cboe=True)
+          elapsed = time.time() - t0
+
+          if df.empty:
+              print('Empty — skipping')
+              exit(0)
+
+          print(f'Fetched {len(df)} contracts in {elapsed:.0f}s')
+
+          from oi_history import save_snapshot
+          path = save_snapshot(df)
+          print(f'Saved: {os.path.basename(path)}')
           "
 
-      - name: Commit and push
+      - name: Commit batch results
         run: |
           git config user.name "options-scanner-bot"
           git config user.email "bot@options-scanner.local"
           git add output/oi_history/*.json
           if git diff --cached --quiet; then
-            echo "No changes to commit"
+            echo "No changes"
           else
-            git commit -m "Daily scan $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git commit -m "Batch ${{ matrix.batch }} — $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git pull --rebase origin main
+            git push
+          fi
+
+  cleanup:
+    needs: scan-batch
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Cleanup old data
+        run: |
+          python3 -c "
+          import sys, os
+          sys.path.insert(0, os.getcwd())
+          from oi_history import cleanup_old_snapshots
+          n = cleanup_old_snapshots(keep_days=30)
+          print(f'Cleaned {n} old files')
+          "
+      - name: Commit cleanup
+        run: |
+          git config user.name "options-scanner-bot"
+          git config user.email "bot@options-scanner.local"
+          git add -A output/oi_history/
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Cleanup old snapshots — $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git pull --rebase origin main
             git push
           fi
