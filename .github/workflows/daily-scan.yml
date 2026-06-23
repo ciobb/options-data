@@ -26,7 +26,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install pandas requests yfinance
+        run: pip install pandas requests yfinance lxml
 
       - name: Fetch S&P 500 options data
         working-directory: ${{ github.workspace }}
