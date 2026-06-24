@@ -1,8 +1,7 @@
 """S&P 500 constituent list fetcher.
 
-Gets the current S&P 500 tickers from Wikipedia (free, no API key).
-Ticker list is cached to a local file and refreshed weekly to avoid
-hitting Wikipedia on every scan.
+Gets the current S&P 500 tickers from a reliable CSV dataset on GitHub
+(free, no API key). Ticker list is cached locally and refreshed weekly.
 
 Usage:
     fetch_sp500_tickers()  # returns cached list, refreshes weekly
@@ -10,18 +9,21 @@ Usage:
 
 from __future__ import annotations
 
+import csv
 import io
 import json
 import logging
 import os
 from datetime import datetime, timedelta
 
-import pandas as pd
 import requests
 
 logger = logging.getLogger(__name__)
 
-SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+SP500_URL = (
+    "https://raw.githubusercontent.com/datasets/"
+    "s-and-p-500-companies/main/data/constituents.csv"
+)
 CACHE_FILE = "sp500_cache.json"
 REFRESH_DAYS = 7  # refresh once per week
 
@@ -38,14 +40,14 @@ def fetch_sp500_tickers() -> list[str]:
             return cached["tickers"]
 
     # Fetch fresh
-    tickers = _fetch_from_wikipedia()
+    tickers = _fetch_tickers()
     if tickers:
         _save_cache(tickers)
         return tickers
 
     # Fallback to stale cache
     if cached:
-        logger.warning("Wikipedia fetch failed, using stale cache (%d days old)",
+        logger.warning("Fetch failed, using stale cache (%d days old)",
                        (datetime.utcnow() - datetime.fromisoformat(cached["fetched_at"])).days)
         return cached["tickers"]
 
@@ -72,22 +74,18 @@ def _save_cache(tickers: list[str]) -> None:
         logger.warning("Failed to save cache: %s", exc)
 
 
-def _fetch_from_wikipedia() -> list[str]:
+def _fetch_tickers() -> list[str]:
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        r = requests.get(SP500_URL, headers=headers, timeout=15)
+        r = requests.get(SP500_URL, timeout=15)
         r.raise_for_status()
 
-        tables = pd.read_html(io.StringIO(r.text))
-        df = tables[0]
-        if "Symbol" not in df.columns:
-            logger.error("S&P 500 table format changed, columns: %s", df.columns.tolist())
+        reader = csv.DictReader(io.StringIO(r.text))
+        if "Symbol" not in (reader.fieldnames or []):
+            logger.error("S&P 500 CSV format changed, columns: %s", reader.fieldnames)
             return []
 
-        tickers = sorted(df["Symbol"].str.replace(".", "-", regex=False).tolist())
-        logger.info("Fetched %d S&P 500 tickers from Wikipedia", len(tickers))
+        tickers = sorted(row["Symbol"].strip() for row in reader)
+        logger.info("Fetched %d S&P 500 tickers from CSV", len(tickers))
         return tickers
     except requests.RequestException as exc:
         logger.error("HTTP error fetching S&P 500 list: %s", exc)
