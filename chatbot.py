@@ -33,11 +33,12 @@ def _build_context(df: Any, ticker: str) -> str:
                 gamma = f"Γ={r['gamma']:.4f}" if pd_notna(r.get("gamma")) else ""
                 theta = f"Θ={r['theta']:.4f}" if pd_notna(r.get("theta")) else ""
                 greeks = " ".join(filter(None, [delta, gamma, theta]))
-                lines.append(
+                line = (
                     f"  {r['contractSymbol']} | Strike={r['strike']} | Expiry={r['expiration']} | "
                     f"OI={int(r['openInterest'])} | IV={iv} | Bid={r.get('bid','?')} | "
                     f"Ask={r.get('ask','?')} | Last={r.get('lastPrice','?')} {greeks}"
                 ).rstrip()
+                lines.append(line)
 
     # Also include near-term expirations' full strike range (top 20 each)
     exp_dates = sorted(df["expiration"].unique())
@@ -51,12 +52,13 @@ def _build_context(df: Any, ticker: str) -> str:
                 for _, r in subset.iterrows():
                     iv = f"{r['impliedVolatility']*100:.1f}%" if pd_notna(r.get("impliedVolatility")) else "N/A"
                     delta = f"Δ={r['delta']:.3f}" if pd_notna(r.get("delta")) else ""
-                    lines.append(
+                    line = (
                         f"  {r['contractSymbol']} | Strike={r['strike']} | "
                         f"OI={int(r['openInterest'])} | IV={iv} | "
                         f"Bid={r.get('bid','?')} | Ask={r.get('ask','?')} | "
                         f"Last={r.get('lastPrice','?')} {delta}"
                     ).rstrip()
+                    lines.append(line)
 
     return "\n".join(lines)
 
@@ -94,11 +96,12 @@ def ask_deepseek(
     context = _build_context(df, ticker)
 
     system_prompt = (
-        "You are an options trading analyst. Answer questions ONLY based on the options data "
-        "provided below. If the data doesn't contain enough information to answer, say so. "
-        "Do NOT use outside knowledge or make up data. "
-        "Be concise. Use bullet points when listing multiple items. "
-        "Explain IV, Greeks, and strategies in simple terms when relevant."
+        "You are a Wall Street options analyst. Answer questions using ONLY the options data "
+        "provided below. The data is organized in sections: a Top 50 overview, then detailed "
+        "near-term expiration sections. SEARCH ALL SECTIONS for the expiry date mentioned in "
+        "the question before concluding data is missing. "
+        "If the exact expiry is present in the data, analyze those contracts. "
+        "Do NOT use outside knowledge. Be concise. Recommend specific contracts when asked."
     )
 
     payload = {
