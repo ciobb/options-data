@@ -52,8 +52,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
-        run: pip install pandas requests yfinance lxml
+      - name: Install system deps + Python packages
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq libxml2-dev libxslt-dev
+          pip install pandas requests yfinance lxml
 
       - name: Scan batch ${{ matrix.batch }}
         run: |
@@ -120,6 +122,7 @@ jobs:
 
       - name: Merge batches, save snapshots, cleanup
         run: |
+          pip install pandas
           python3 -c "
           import sys, os, glob
           sys.path.insert(0, os.getcwd())
