@@ -44,7 +44,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        batch: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 10 parallel jobs
+        batch: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     steps:
       - uses: actions/checkout@v4
 
@@ -56,10 +56,9 @@ jobs:
         run: pip install pandas requests yfinance lxml
 
       - name: Scan batch ${{ matrix.batch }}
-        id: scan
         run: |
           python3 -c "
-          import sys, os, time
+          import sys, os, time, json
           sys.path.insert(0, os.getcwd())
           from sp500 import fetch_sp500_tickers
           from fetcher import fetch_chains
@@ -69,7 +68,6 @@ jobs:
               print('No tickers')
               exit(1)
 
-          # Split into ${{ matrix.batch }} / 10
           batch_size = max(1, len(tickers) // 10)
           start = ${{ matrix.batch }} * batch_size
           end = start + batch_size if ${{ matrix.batch }} < 9 else len(tickers)
@@ -86,53 +84,77 @@ jobs:
 
           print(f'Fetched {len(df)} contracts in {elapsed:.0f}s')
 
-          from oi_history import save_snapshot
-          path = save_snapshot(df)
-          print(f'Saved: {os.path.basename(path)}')
+          # Save as CSV for the merge job
+          outdir = 'output/batches'
+          os.makedirs(outdir, exist_ok=True)
+          path = os.path.join(outdir, f'batch_${{ matrix.batch }}.csv')
+          df.to_csv(path, index=False)
+          print(f'Saved: {path} ({os.path.getsize(path)} bytes)')
           "
 
-      - name: Commit batch results
-        run: |
-          git config user.name "options-scanner-bot"
-          git config user.email "bot@options-scanner.local"
-          git add output/oi_history/*.json
-          if git diff --cached --quiet; then
-            echo "No changes"
-          else
-            git commit -m "Batch ${{ matrix.batch }} — $(date -u +'%Y-%m-%d %H:%M UTC')"
-            git pull --rebase origin main
-            git push
-          fi
+      - name: Upload batch artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: batch-${{ matrix.batch }}
+          path: output/batches/batch_${{ matrix.batch }}.csv
+          retention-days: 1
 
-  cleanup:
+  merge-and-push:
     needs: scan-batch
-    if: always()
+    if: always() && needs.check-trading-day.outputs.is_trading == 'True'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Cleanup old data
+
+      - name: Download all batch artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: batch-*
+          path: output/batches
+
+      - name: Merge batches, save snapshots, cleanup
         run: |
           python3 -c "
-          import sys, os
+          import sys, os, glob
           sys.path.insert(0, os.getcwd())
-          from oi_history import cleanup_old_snapshots
+          import pandas as pd
+
+          csvs = sorted(glob.glob('output/batches/batch-*/*.csv'))
+          print(f'Found {len(csvs)} batch files')
+          if not csvs:
+              print('No data — exiting')
+              exit(0)
+
+          dfs = []
+          for f in csvs:
+              df = pd.read_csv(f)
+              if not df.empty:
+                  dfs.append(df)
+              print(f'  {f}: {len(df)} rows')
+
+          combined = pd.concat(dfs, ignore_index=True)
+          print(f'Merged: {len(combined)} contracts across {combined[\"ticker\"].nunique()} tickers')
+
+          from oi_history import save_snapshot, cleanup_old_snapshots
+          save_snapshot(combined)
           n = cleanup_old_snapshots(keep_days=365)
           print(f'Cleaned {n} old files')
           "
-      - name: Commit cleanup
+
+      - name: Commit and push
         run: |
           git config user.name "options-scanner-bot"
           git config user.email "bot@options-scanner.local"
-          git add -A output/oi_history/
+          git add output/oi_history/*.json
           if git diff --cached --quiet; then
-            echo "No changes"
+            echo "No changes to commit"
           else
-            git commit -m "Cleanup old snapshots — $(date -u +'%Y-%m-%d %H:%M UTC')"
-            git pull --rebase origin main
+            git commit -m "Daily scan $(date -u +'%Y-%m-%d %H:%M UTC')"
             git push
           fi
